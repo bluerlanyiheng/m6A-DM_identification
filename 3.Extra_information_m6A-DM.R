@@ -1,5 +1,4 @@
 #data collection for CGCgenes,meRIP-peaks and high-resolution m6A data
-
 library(readr)
 library(dplyr)
 library(GenomicRanges)
@@ -9,30 +8,21 @@ library(vcfR)
 # Create new columns "Seqname", "Start", and "End"
 meRIP_peak <- data.frame(meRIP_peak, stringsAsFactors = FALSE)
 meRIP_peak <- separate(meRIP_peak, col = meRIP_peak, into = c("Seqname", "Start", "End"),sep = "[:-]")
-
-library(GenomicRanges)
-
 # Read the hg38 genome annotation file (GTF format)
 gtf <- read.delim("hg38.gtf", header = FALSE, comment.char = "#", sep = "\t", stringsAsFactors = FALSE)
-
 # Extract the CDS positions
 cds <- gtf[gtf$V3 == "CDS", c("V1", "V4", "V5")]
-
 # Create GenomicRanges objects
 peak_gr <- with(meRIP_peak, GRanges(Chromosome = Seqname, IRanges(Start, End)))
 cds_gr <- with(cds, GRanges(Chromosome = V1, IRanges(V4, V5)))
-
 # Filter peaks on CDS
 cds_peaks <- subsetByOverlaps(peak_gr, cds_gr)
-
 # Calculate the length of each peak on CDS
 peak_lengths <- width(cds_peaks)
-
 # Create a new data frame with peak lengths for each gene CDS
 cds_peak_lengths <- data.frame(Gene = unique(cds$V9), PeakLength = tapply(peak_lengths, factor(as.character(queryHits(cds_peaks))), sum))
 cds_peak_lengths <- unique(cds_peak_lengths)
 cds_peak_lengths$Gene <- sub('.*?"gene_name":"(.*?)".*', '\\1', cds_peak_lengths$Gene)
-
 # Calculate the total length of peaks on the entire CDS for each gene
 gene_peak_lengths <- aggregate(PeakLength ~ Gene, data = cds_peak_lengths, FUN = sum)
 
@@ -43,7 +33,6 @@ mut <- data.frame(mut)
 mut <- subset(mut,grepl("^.*y.*$",Genome.wide.screen))
 synonymous_mutation <- subset(mut,mut$Mutation.Description=="Substitution - coding silent")
 missense_mutation<- subset(mut,mut$Mutation.Description=="Substitution - Missense")
-
 synonymous_mutation <- distinct(synonymous_mutation, HGVSG, ID_sample, .keep_all= TRUE)
 missense_mutation <- distinct(missense_mutation, HGVSG, ID_sample, .keep_all= TRUE)
 
@@ -69,7 +58,6 @@ df_muttype
 cnv <- read.table("CosmicCompleteCNA.tsv", header = TRUE, sep = "\t", na.strings = TRUE, fill = TRUE) 
 cnv <- data.frame(cnv)
 cnv <- subset(cnv,grepl("^.*TCGA.*$",SAMPLE_NAME))
-
 cnv2 <- distinct(cnv, CNV_ID, ID_SAMPLE, .keep_all= TRUE)
 cnv
 cnv_countpersample <- count(cnv2, ID_SAMPLE)
@@ -78,8 +66,6 @@ cnv_countpersample <- count(cnv2, ID_SAMPLE)
 CGC <- CGC_set$GENE_SYMBOL
 CGC<-as.vector(as.matrix(CGC))
 cgc_cnv <- cnv %>% filter(cnv$gene_name %in% CGC)
-
-
 ############################################################################################################################
 #collection of gnomAD data, A-to-I data and WER-data
 #AF information from gnomAD4.0.0
