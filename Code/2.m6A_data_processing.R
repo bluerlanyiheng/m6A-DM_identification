@@ -1,5 +1,3 @@
-#data collection for CGCgenes,meRIP-peaks and high-resolution m6A data
-
 library(readr)
 library(dplyr)
 library(GenomicRanges)
