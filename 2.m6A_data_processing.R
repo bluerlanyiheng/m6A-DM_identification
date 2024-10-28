@@ -5,9 +5,8 @@ library(dplyr)
 library(GenomicRanges)
 library(vcfR)
 #################################################################################################################################
-# Data collection and processing for CGC-geneset & high-resolution m6A-data & meRIP-peak data
-# Cancer Gene Census Tier 1 gene set
-# Read the file
+# Data collection and processing for high-resolution m6A-data & meRIP-peak data
+
 cancer_gene_census <- read_tsv("Cosmic_CancerGeneCensus_v98_GRCh38.tsv")
 
 # Filter the rows where "TIER" column is equal to "1" and keep all the information
@@ -43,100 +42,145 @@ meRIP_peak <- m6A_data$pos
 # Merge HighRes_m6A and meRIP_peak into m6A_range
 m6A_range <- union(HighRes_m6A, meRIP_peak)
 
-###############################################################################################################################
-#meRIP-peak length for genes
-# Create new columns "Seqname", "Start", and "End"
-meRIP_peak <- data.frame(meRIP_peak, stringsAsFactors = FALSE)
-meRIP_peak <- separate(meRIP_peak, col = meRIP_peak, into = c("Seqname", "Start", "End"),sep = "[:-]")
+#################################################################################################################################
+#Merge m6A data into non-redundant peaks by tissues
 
-library(GenomicRanges)
+bed_files <- list.files(path, pattern = "*.bed", full.names = TRUE)
 
-# Read the hg38 genome annotation file (GTF format)
-gtf <- read.delim("hg38.gtf", header = FALSE, comment.char = "#", sep = "\t", stringsAsFactors = FALSE)
+for (file in bed_files) {
+  bed <- read.table(file, header = FALSE, sep = "\t", stringsAsFactors = FALSE)
+  # Extract the file name (excluding the path and extension)
+  file_name <- gsub("\\.bed$", "", basename(file))
+  # Store the BED data in a separate object, named after the file name
+  assign(file_name, bed)
+}
+# Get all object names
+object_names <- gsub("\\.bed$", "", basename(bed_files))
+# For each BED data, merge peaks, calculate peak lengths, and output the merged BED dat
+for (file_name in object_names) {
+  # Get the BED data
+  bed <- get(file_name)
+  # Convert the data frame to a GRanges object, specifying the columns for seqnames, start, and end
+  gr <- makeGRangesFromDataFrame(bed, 
+                                 keep.extra.columns = TRUE, 
+                                 seqnames.field = "V1",  # Assume the seqnames column is the first column
+                                 
+                                 start.field = "V2",     # Assume the start column is the second column
+                                 
+                                 end.field = "V3")       # Assume the end column is the third column
+  
+  
+  # Merge peaks
+  merged_bed <- reduce(gr)
+  # Calculate peak lengths
+  peak_lengths <- width(merged_bed)
+  # Add peak lengths to a new column
+  merged_bed$length <- peak_lengths
+  # Convert the GRanges object back to a data frame
+  merged_df <- as.data.frame(merged_bed)
+  # Construct the output file name
+  output_file <- file.path(path, paste0(file_name, "_merged.bed"))
+  # Output the merged BED data
+  write.table(merged_df, file = output_file, sep = "\t", row.names = FALSE, col.names = FALSE, quote = FALSE)
+  # Count the number of lines in the merged BED file
+  num_lines <- length(readLines(output_file))
+  # Print the number of lines
+  cat(paste0("Number of lines in ", output_file, ": ", num_lines, "\n"))
+}
 
-# Extract the CDS positions
-cds <- gtf[gtf$V3 == "CDS", c("V1", "V4", "V5")]
+###############################################################################################################################################
+##merge peaks by using all tissues
 
-# Create GenomicRanges objects
-peak_gr <- with(meRIP_peak, GRanges(Chromosome = Seqname, IRanges(Start, End)))
-cds_gr <- with(cds, GRanges(Chromosome = V1, IRanges(V4, V5)))
+merged_bed_files <- list.files(path, pattern = "_merged.bed$", full.names = TRUE)
 
-# Filter peaks on CDS
-cds_peaks <- subsetByOverlaps(peak_gr, cds_gr)
+all_merged_peaks <- GRanges()
 
-# Calculate the length of each peak on CDS
-peak_lengths <- width(cds_peaks)
+for (file in merged_bed_files) {
 
-# Create a new data frame with peak lengths for each gene CDS
-cds_peak_lengths <- data.frame(Gene = unique(cds$V9), PeakLength = tapply(peak_lengths, factor(as.character(queryHits(cds_peaks))), sum))
-cds_peak_lengths <- unique(cds_peak_lengths)
-cds_peak_lengths$Gene <- sub('.*?"gene_name":"(.*?)".*', '\\1', cds_peak_lengths$Gene)
-
-# Calculate the total length of peaks on the entire CDS for each gene
-gene_peak_lengths <- aggregate(PeakLength ~ Gene, data = cds_peak_lengths, FUN = sum)
-
-##############################################################################################################################################
-# Extra calculation of the mutational features
-mut <- read.table("CosmicMutantExport.tsv", header=T, sep="\t")
-mut <- data.frame(mut)
-mut <- subset(mut,grepl("^.*y.*$",Genome.wide.screen))
-synonymous_mutation <- subset(mut,mut$Mutation.Description=="Substitution - coding silent")
-missense_mutation<- subset(mut,mut$Mutation.Description=="Substitution - Missense")
-
-synonymous_mutation <- distinct(synonymous_mutation, HGVSG, ID_sample, .keep_all= TRUE)
-missense_mutation <- distinct(missense_mutation, HGVSG, ID_sample, .keep_all= TRUE)
-
-# Count for #synonymous mutations per gene and #missense mutations per gene
-count_result_synonymous_mutation <- count(synonymous_mutation, HGNC.ID)
-count_result_missense_mutation <- count(missense_mutation, HGNC.ID)
-
-#Count the number of synonymous and missense mutations
-df_syn <- distinct(synonymous_mutation, HGVSG, .keep_all= TRUE)
-nrow(df_syn)
-df_mis <- distinct(missense_mutation, HGVSG, .keep_all= TRUE)
-nrow(df_mis)
-
-#Count for the genome-wide screening samples
-df_sample <- distinct(a, ID_sample, .keep_all= TRUE)
-nrow(df_sample)
-
-#Count for mutation type
-df_muttype <- distinct(a, Mutation.Description, .keep_all= TRUE)
-df_muttype
-
-#Count for CNV data in TCGA
-cnv <- read.table("CosmicCompleteCNA.tsv", header = TRUE, sep = "\t", na.strings = TRUE, fill = TRUE) 
-cnv <- data.frame(cnv)
-cnv <- subset(cnv,grepl("^.*TCGA.*$",SAMPLE_NAME))
-
-cnv2 <- distinct(cnv, CNV_ID, ID_SAMPLE, .keep_all= TRUE)
-cnv
-cnv_countpersample <- count(cnv2, ID_SAMPLE)
-
-#Collection of CNVs within CGC genes
-CGC <- CGC_set$GENE_SYMBOL
-CGC<-as.vector(as.matrix(CGC))
-cgc_cnv <- cnv %>% filter(cnv$gene_name %in% CGC)
+  bed <- read.table(file, header = FALSE, sep = "\t", stringsAsFactors = FALSE)
+  # Convert the data frame to a GRanges object
+  gr <- makeGRangesFromDataFrame(bed, 
+                                 keep.extra.columns = TRUE, 
+                                 seqnames.field = "V1",  # Assume the seqnames column is the first column
+                                 start.field = "V2",     # Assume the start column is the second column
+                                 end.field = "V3")       # Assume the end column is the third column
+  # Combine the current GRanges object with the all_merged_peaks GRanges object
+  all_merged_peaks <- c(all_merged_peaks, gr)
+}
+class(all_merged_peaks)
+# Merge all peaks
+all_merged_peaks <- reduce(all_merged_peaks)
+# Calculate peak lengths
+peak_lengths <- width(all_merged_peaks)
+# Add peak lengths to a new column
+all_merged_peaks$length <- peak_lengths
+# Convert the GRanges object back to a data frame
+all_merged_df <- as.data.frame(all_merged_peaks)
+# Construct the output file name
+output_file <- file.path(path, "all_merged.bed")
+#Output the merged BED data
+write.table(all_merged_df, file = output_file, sep = "\t", row.names = FALSE, col.names = FALSE, quote = FALSE)
+# Count the number of lines in the all_merged.bed file
+num_lines <- length(readLines(output_file))
+# Print the number of lines
+cat(paste0("Number of lines in ", output_file, ": ", num_lines, "\n"))
 
 
-############################################################################################################################
-#collection of gnomAD data, A-to-I data and WER-data
-#AF information from gnomAD4.0.0
-gnomad.exomes.r4.0.0.sites.vcf <-"bcftools annotate -x ^INFO/AF gnomad.exomes.r4.0.0.sites.vcf.bgz"
-# Read the VCF file
-vcf_data <- readVcf("gnomad.exomes.r4.0.0.sites.vcf")
-vcf_data$CHROM <- gsub("^chr", "", vcf_data$CHROM)
-vcf_data$mutation_iden <- paste(vcf_data$CHROM, vcf_data$POS, vcf_data$REF, vcf_data$ALT, sep = "-")#chr-pos-ref-alt
-gnomAD_data <- vcf_data[, c("mutation_iden", "INFO")]#chr-pos-ref-alt AF
+#############################################################################################################################
+##counting overlapping peaks by tissues
 
-#WER-data
-data <- read.table("hg38_Human_m6A_ClipSeqRipSeqResult.txt", header = F)
-WER_association <- unique(data[, c(3, 4)])
+overlap_counts <- data.frame(peak_id = seq_along(all_merged_peaks), stringsAsFactors = FALSE)
+for (file in merged_bed_files) {
+  tissue_name <- gsub("\\.bed$", "", basename(file))
+  tissue_name <- gsub("_merged", "", tissue_name)
+  overlap_counts[[tissue_name]] <- 0
+}
 
-#A-to-I data
-data <- read.table("TABLE1_hg38.txt", header = F)
-atoi_edit_pos <- unique(data[, 1:2])
-atoi_edit_pos$V1 <- gsub("chr", "", atoi_edit_pos$V1)
-atoi_edit_pos$pos <- paste0(atoi_edit_pos$V1, ":", atoi_edit_pos$V2, "-", atoi_edit_pos$V2)
+for (file in merged_bed_files) {
+  # Read the _merged.bed file
+  bed <- read.table(file, header = FALSE, sep = "\t", stringsAsFactors = FALSE)
+  # Convert the data frame to a GRanges object
+  gr_tissue <- makeGRangesFromDataFrame(bed, 
+                                        keep.extra.columns = TRUE, 
+                                        seqnames.field = "V1",  # Assume the seqnames column is the first column
+                                        
+                                        start.field = "V2",     # Assume the start column is the second column
+                                        
+                                        end.field = "V3")       # Assume the end column is the third column
+ 
+  overlaps <- findOverlaps(all_merged_peaks, gr_tissue)
+ 
+# Count overlaps
+  tissue_name <- gsub("\\.bed$", "", basename(file))
+  tissue_name <- gsub("_merged", "", tissue_name)
+  overlap_counts[[tissue_name]][queryHits(overlaps)] <- 1
+  
+}
+
+overlap_counts$sum <- rowSums(overlap_counts[, -1])
+
+output_file_overlap_counts <- file.path(path, "all_merged_overlap_counts.txt")
+
+write.table(overlap_counts, file = "output_file_overlap_counts.txt", sep = "\t", row.names = FALSE, quote = FALSE)
+
+num_lines_overlap_counts <- length(readLines(output_file_overlap_counts))
+cat(paste0("Number of lines in ", output_file_overlap_counts, ": ", num_lines_overlap_counts, "\n"))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
